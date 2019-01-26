@@ -102,7 +102,9 @@ class PShape:
 
     """
     def __init__(self, vertices=[], fill_color='auto',
-                 stroke_color='auto', visible=False, attribs='closed',
+                 stroke_color='auto', stroke_weight='auto', 
+                 stroke_cap='auto', stroke_join='auto', 
+                 visible=False, attribs='closed',
                  children=[]):
         # basic properties of the shape
         self._vertices = np.array([])
@@ -122,14 +124,6 @@ class PShape:
         self._in_edit_mode = False
         self._vertex_cache = None
 
-        # The triangulation used to render the shapes.
-        self._tri = None
-        self._tri_required = not ('point' in self.attribs) and \
-                             not ('path' in self.attribs)
-        self._tri_vertices = None
-        self._tri_edges = None
-        self._tri_faces = None
-
         if len(vertices) > 0:
             self.vertices = vertices
 
@@ -138,6 +132,9 @@ class PShape:
 
         self.fill = fill_color
         self.stroke = stroke_color
+        self.stroke_weight = stroke_weight
+        self.stroke_cap = stroke_cap
+        self.stroke_join = stroke_join
 
         self.children = children
 
@@ -165,6 +162,24 @@ class PShape:
         elif name == 'fill':
             self._fill = color
 
+    def _set_stroke_weight(self, value=1):
+        if value == 'auto':
+            self._stroke_weight = sketch.renderer.stroke_weight
+        else: 
+            self._stroke_weight = value
+
+    def _set_stroke_cap(self, value="BUTT"):
+        if value == 'auto':
+            self._stroke_cap = sketch.renderer.stroke_cap
+        else: 
+            self._stroke_cap = value
+
+    def _set_stroke_join(self, value="MITER"):
+        if value == 'auto':
+            self._stroke_join = sketch.renderer.stroke_join
+        else: 
+            self._stroke_join = value
+
     @property
     def fill(self):
         if isinstance(self._fill, Color):
@@ -182,6 +197,30 @@ class PShape:
     @stroke.setter
     def stroke(self, new_color):
        self._set_color('stroke', new_color)
+
+    @property
+    def stroke_weight(self):
+        return self._stroke_weight
+
+    @stroke_weight.setter
+    def stroke_weight(self, weight):
+       self._set_stroke_weight(weight)
+
+    @property
+    def stroke_cap(self):
+        return self._stroke_cap
+
+    @stroke_cap.setter
+    def stroke_cap(self, cap):
+       self._set_stroke_cap(cap)
+
+    @property
+    def stroke_join(self):
+        return self._stroke_join
+
+    @stroke_join.setter
+    def stroke_join(self, join):
+       self._set_stroke_join(join)
 
     @property
     def kind(self):
@@ -235,105 +274,6 @@ class PShape:
     def vertices(self, new_vertices):
         n = len(new_vertices)
         self._vertices = self._sanitize_vertex_list(new_vertices)
-        self._outline_vertices = np.hstack([self._vertices, np.zeros((n, 1))])
-        self._tri_vertices = None
-        self._tri_edges = None
-        self._tri_faces = None
-
-    def _compute_poly_edges(self):
-        n, _ = self._vertices.shape
-        return np.vstack([np.arange(n), (np.arange(n) + 1) % n]).transpose()
-
-    def _compute_outline_edges(self):
-        n, _ = self._vertices.shape
-        return np.vstack([np.arange(n - 1),
-                          (np.arange(n - 1) + 1) % n]).transpose()
-
-    @property
-    def edges(self):
-        if 'point' in self.attribs:
-            return np.array([])
-
-        if self._edges is None:
-            n, _ = self._vertices.shape
-
-            if 'point' in self.attribs:
-                self._edges = np.array([])
-            elif 'path' in self.attribs:
-                self._edges = self._compute_outline_edges()
-            else:
-                self._edges = self._compute_poly_edges()
-
-            if 'open' in self.attribs:
-                self._outline = self._compute_outline_edges()
-            else:
-                self._outline = self._edges
-
-        return self._edges
-
-    def _retriangulate(self):
-        """Triangulate the shape
-        """
-        self._tri = geometry.Triangulation(self.vertices, self.edges)
-        self._tri.triangulate()
-
-        if isinstance(self._tri.edges, np.ndarray):
-            self._tri_edges = self._tri.edges
-        else:
-            self._tri_edges = np.array([])
-
-        self._tri_faces = self._tri.tris
-        self._tri_vertices = self._tri.pts
-
-        if isinstance(self._tri.edges, np.ndarray):
-            self._tri_edges = self._tri.edges
-        else:
-            self._tri_edges = np.array([])
-            
-        if isinstance(self._tri.tris, np.ndarray):
-            self._tri_faces = self._tri.tris
-        else:
-            self._tri_faces = np.array([])
-
-        self._tri_vertices = self._tri.pts
-
-    @property
-    def _draw_outline_vertices(self):
-        if 'open' in self.attribs:
-            return self._draw_vertices
-        return self.vertices
-
-    @property
-    def _draw_outline_edges(self):
-        if 'open' in self.attribs:
-            return self._outline
-        return self._edges
-
-    @property
-    def _draw_vertices(self):
-        if self._tri_required and (self._tri_vertices is None):
-            self._retriangulate()
-
-        if self._tri_required:
-            return self._tri_vertices
-        return self._vertices
-
-    @property
-    def _draw_edges(self):
-        if self._tri_required:
-            if self._tri_edges is None:
-                self._retriangulate()
-            return self._tri_edges
-        return self.edges
-
-    @property
-    def _draw_faces(self):
-        if self._tri_required:
-            if self._tri_faces is None:
-                self._retriangulate()
-            return self._tri_faces
-
-        return np.array([])
 
     @contextlib.contextmanager
     def edit(self, reset=True):

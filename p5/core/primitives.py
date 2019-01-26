@@ -86,89 +86,32 @@ class Arc(PShape):
         self._start_angle = start_angle
         self._stop_angle = stop_angle
 
-        self._faces = None
-
         super().__init__(vertices=[], attribs=attribs, **kwargs)
-        self._tessellate()
 
-    @property
-    def _draw_vertices(self):
-        if self._vertices is None:
-            self._tessellate()
-        return self._vertices
+class Rect(PShape):
+    def __init__(self, center, width, height, **kwargs):
+        self._center = center
+        self._width = width
+        self._height = height
 
-    @property
-    def _draw_edges(self):
-        if self._vertices is None:
-            self._tessellate()
-        n, _ = self._vertices.shape
-        e = self._compute_outline_edges()
-        if 'chord' in self.attribs:
-            return np.concatenate([e, [[1, n - 1]]])
-        return np.concatenate([e, [[0, 1]], [[0, n]]])
+        super().__init__(vertices=[], **kwargs)
 
-    @property
-    def _draw_faces(self):
-        if self._vertices is None:
-            self._tessellate()
-        n, _ = self._vertices.shape
-        ar = np.arange(1, n - 1).reshape((n - 2, 1))
-        f = np.hstack([np.zeros((n - 2, 1)), ar, ar + 1])
+class Ellipse(PShape):
+    def __init__(self, center, width, height, **kwargs):
+        self._center = center
+        self._width = width
+        self._height = height
 
-        if 'open' in self.attribs or 'chord' in self.attribs:
-            return np.vstack([f, np.array([[0, n - 1, 1]])])
+        super().__init__(vertices=[], **kwargs)
 
-        return f
+class Bezier(PShape):
+    def __init__(self, start, control_point_1, control_point_2, stop, **kwargs):
+        self._start = start
+        self._control_point_1 = control_point_1
+        self._control_point_2 = control_point_2
+        self._stop = stop
 
-    @property
-    def _draw_outline_vertices(self):
-        return self._compute_outline_edges()
-
-    @property
-    def _draw_outline_edges(self):
-        return self._compute_outline_edges()
-
-    def _compute_outline_edges(self):
-        n, _ = self._vertices.shape
-        e = np.vstack([np.arange(1, n - 1), np.arange(2, n)]).transpose()
-        return e
-
-    def _tessellate(self):
-        """Generate vertex and face data using radii.
-        """
-        rx = self._radii[0]
-        ry = self._radii[1]
-
-        c1x = self._center[0]
-        c1y = self._center[1]
-        s1 = sketch.renderer.transform_matrix.dot(np.array([c1x, c1y, 0, 1]))
-
-        c2x = c1x + rx
-        c2y = c1y + ry
-        s2 = sketch.renderer.transform_matrix.dot(np.array([c2x, c2y, 0, 1]))
-
-        sdiff = (s2 - s1)
-        size_acc = (np.sqrt(np.sum(sdiff * sdiff)) * math.pi * 2) / POINT_ACCURACY_FACTOR
-
-        acc = min(MAX_POINT_ACCURACY, max(MIN_POINT_ACCURACY, int(size_acc)))
-        inc = int(len(SINCOS) / acc)
-
-        sclen = len(SINCOS)
-        start_index = int((self._start_angle / (math.pi * 2)) * sclen)
-        end_index = int((self._stop_angle / (math.pi * 2)) * sclen)
-
-        vertices = [(c1x, c1y)]
-        for idx in range(start_index, end_index, inc):
-            i = idx % sclen
-            vertices.append((
-                c1x + rx * SINCOS[i][1],
-                c1y + ry * SINCOS[i][0],
-            ))
-        vertices.append((
-            c1x + rx * SINCOS[end_index % sclen][1],
-            c1y + ry * SINCOS[end_index % sclen][0],
-        ))
-        self._vertices = np.array(vertices)
+        super().__init__(vertices=[], attribs='path', **kwargs)
 
 @_draw_on_return
 def point(x, y, z=0):
@@ -231,15 +174,7 @@ def bezier(start, control_point_1, control_point_2, stop):
     :rtype: PShape.
 
     """
-    vertices = []
-    steps = curves.bezier_resolution
-    for i in range(steps + 1):
-        t = i / steps
-        p = curves.bezier_point(start, control_point_1,
-                                control_point_2, stop, t)
-        vertices.append(p[:3])
-
-    return PShape(vertices, attribs='path')
+    return Bezier(start, control_point_1, control_point_2, stop)
 
 @_draw_on_return
 def curve(point_1, point_2, point_3, point_4):
@@ -317,6 +252,7 @@ def quad(p1, p2, p3, p4):
             qd.add_vertex(pt)
     return qd
 
+@_draw_on_return
 def rect(coordinate, *args, mode=None):
     """Return a rectangle.
 
@@ -369,11 +305,7 @@ def rect(coordinate, *args, mode=None):
     else:
         raise ValueError("Unknown rect mode {}".format(mode))
 
-    p1 = Point(*corner)
-    p2 = Point(p1.x + width, p1.y, p1.z)
-    p3 = Point(p2.x, p2.y + height, p2.z)
-    p4 = Point(p1.x, p3.y, p3.z)
-    return quad(p1, p2, p3, p4)
+    return Rect(corner, width, height)
 
 def square(coordinate, side_length, mode=None):
     """Return a square.
@@ -485,6 +417,7 @@ def arc(coordinate, width, height, start_angle, stop_angle,
         raise ValueError("Unknown arc mode {}".format(emode))
     return Arc(center, dim, start_angle, stop_angle, attribs=amode)
 
+@_draw_on_return
 def ellipse(coordinate, *args, mode=None):
     """Return a ellipse.
 
@@ -524,7 +457,21 @@ def ellipse(coordinate, *args, mode=None):
         mode = 'CORNER'
     else:
         width, height = args
-    return arc(coordinate, width, height, 0, math.pi * 2, 'CHORD', mode)
+
+    if mode == 'CORNER':
+        corner = Point(*coordinate)
+        dim = Point(width, height)
+        center = (corner.x + (dim.x / 2), corner.y + (dim.y / 2), corner.z)
+    elif mode == 'CENTER':
+        center = Point(*coordinate)
+        dim = Point(width / 2, height / 2)
+    elif mode == 'RADIUS':
+        center = Point(*coordinate)
+        dim = Point(width, height)
+    else:
+        raise ValueError("Unknown ellipse mode {}".format(mode))
+
+    return Ellipse(coordinate, width, height)
 
 def circle(coordinate, radius, mode=None):
     """Return a circle.

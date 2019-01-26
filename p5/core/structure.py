@@ -37,9 +37,9 @@ def push_style():
     - shape_mode
     - color_mode
     - tint
-    - (*) stroke_weight
-    - (*) stroke_cap
-    - (*) stroke_join
+    - stroke_weight
+    - stroke_cap
+    - stroke_join
     - (*) image_mode
     - (*) text_align
     - (*) text_font
@@ -57,6 +57,10 @@ def push_style():
     prev_fill_enabled = renderer.fill_enabled
     prev_stroke_enabled = renderer.stroke_enabled
     prev_stroke_color = renderer.stroke_color
+    prev_stroke_weight = renderer.stroke_weight
+    prev_stroke_cap = renderer.stroke_cap
+    prev_stroke_join = renderer.stroke_join
+
     prev_tint_color = renderer.tint_color
     prev_tint_enabled = renderer.tint_enabled
 
@@ -74,6 +78,10 @@ def push_style():
     renderer.fill_enabled = prev_fill_enabled
     renderer.stroke_color = prev_stroke_color
     renderer.stroke_enabled = prev_stroke_enabled
+    renderer.stroke_weight = prev_stroke_weight
+    renderer.stroke_cap = prev_stroke_cap
+    renderer.stroke_join = prev_stroke_join
+
     renderer.tint_color = prev_tint_color
     renderer.tint_enabled = prev_tint_enabled
 

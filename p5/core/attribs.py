@@ -29,7 +29,7 @@ from .transforms import push_matrix
 from .transforms import reset_transforms
 
 __all__ = [ 'background', 'fill', 'no_fill',
-            'stroke', 'no_stroke', 'tint', 'no_tint' ]
+            'stroke', 'stroke_weight', 'stroke_cap', 'stroke_join', 'no_stroke', 'tint', 'no_tint', 'smooth', 'no_smooth' ]
 
 def fill(*fill_args, **fill_kwargs):
     """Set the fill color of the shapes.
@@ -73,6 +73,38 @@ def stroke(*color_args, **color_kwargs):
     renderer.stroke_enabled = True
     renderer.stroke_color = stroke_color.normalized
 
+def stroke_weight(weight):
+    """Set the width of the lines around shapes
+
+    :param weight: width of the stroke.
+    :type weight: float
+    """
+    renderer.stroke_weight = weight
+
+def stroke_cap(cap):
+    """Set the end (cap) of the stroke is drawn
+
+    :param cap: type of the cap.
+    :type cap: string
+    """
+
+    if cap != "BUTT" and cap != "ROUND" and cap != "SQUARE":
+        raise ValueError("Cap must be \"BUTT\", \"ROUND\" or \"SQUARE\"")
+
+    renderer.stroke_cap = cap
+
+def stroke_join(join):
+    """Set the corners of the stroke are drawn
+
+    :param join: type of join.
+    :type weijoinght: string
+    """
+
+    if join != "MITER" and join != "ROUND" and join != "SQUARE":
+        raise ValueError("Join must be \"MITER\", \"ROUND\" or \"SQUARE\"")
+
+    renderer.stroke_join = join
+
 def no_stroke():
     """Disable drawing the stroke around shapes."""
     renderer.stroke_enabled = False
@@ -99,6 +131,14 @@ def tint(*color_args, **color_kwargs):
 def no_tint():
     """Disable tinting of images."""
     renderer.tint_enabled = False
+
+def smooth():
+    """Enable smoothing."""
+    renderer.smooth = True
+
+def no_smooth():
+    """Disable smoothing."""
+    renderer.smooth = False
 
 def background(*args, **kwargs):
     """Set the background color for the renderer.

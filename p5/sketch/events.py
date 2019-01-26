@@ -221,7 +221,7 @@ class MouseEvent(Event):
          (defaults to (0, 0)).
     :type scroll: (int, int)
 
-    :param count: amount by which the mouse whell was dragged.
+    :param count: amount by which the mouse wheel was dragged.
     :type count: int
 
     :param button: Button information at the time of the event.

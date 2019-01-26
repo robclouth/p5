@@ -23,18 +23,15 @@ import math
 
 import numpy as np
 
+import glfw
+import OpenGL
+from OpenGL.GL import *
 from vispy import gloo
-from vispy.gloo import FrameBuffer
-from vispy.gloo import IndexBuffer
-from vispy.gloo import Program
-from vispy.gloo import RenderBuffer
-from vispy.gloo import Texture2D
-from vispy.gloo import VertexBuffer
+
+import pynanovg as nvg
 
 from ..pmath import matrix
-from .shaders import src_default
-from .shaders import src_fbuffer
-from .shaders import src_texture
+from ..core.primitives import Arc, PShape, Ellipse, Bezier, Rect
 
 ##
 ## Renderer globals.
@@ -44,16 +41,6 @@ from .shaders import src_texture
 ## - Higher level objects *SHOULD NOT* have direct access to internal
 ##   state variables.
 ##
-default_prog = None
-fbuffer_prog = None
-texture_prog = None
-
-fbuffer = None
-fbuffer_tex_front = None
-fbuffer_tex_back = None
-
-vertex_buffer = None
-index_buffer = None
 
 ## Renderer Globals: USEFUL CONSTANTS
 COLOR_WHITE = (1, 1, 1, 1)
@@ -70,22 +57,20 @@ fill_enabled = True
 stroke_color = COLOR_BLACK
 stroke_enabled = True
 
+stroke_weight = 1
+stroke_cap = "BUTT"
+stroke_join = "MITER"
+
+smooth = True
+
 tint_color = COLOR_BLACK
 tint_enabled = False
 
-## Renderer Globals
-## VIEW MATRICES, ETC
-##
 viewport = None
 texture_viewport = None
 transform_matrix = np.identity(4)
 modelview_matrix = np.identity(4)
 projection_matrix = np.identity(4)
-
-## Renderer Globals: RENDERING
-poly_draw_queue = []
-line_draw_queue = []
-point_draw_queue = []
 
 ## RENDERER SETUP FUNCTIONS.
 ##
@@ -94,14 +79,6 @@ point_draw_queue = []
 ## clearing the screen, etc.
 ##
 
-def _comm_toggles(state=True):
-    gloo.set_state(blend=state)
-    gloo.set_state(depth_test=state)
-
-    if state:
-        gloo.set_state(blend_func=('src_alpha', 'one_minus_src_alpha'))
-        gloo.set_state(depth_func='lequal')
-
 def initialize_renderer():
     """Initialize the OpenGL renderer.
 
@@ -109,46 +86,20 @@ def initialize_renderer():
     the shader programs.
 
     """
-    global fbuffer
-    global fbuffer_prog
-    global default_prog
-    global texture_prog
-    global vertex_buffer
-    global index_buffer
-
-    fbuffer = FrameBuffer()
-
-    vertices = np.array([[-1.0, -1.0],
-                         [+1.0, -1.0],
-                         [-1.0, +1.0],
-                         [+1.0, +1.0]],
-                        np.float32)
-    texcoords = np.array([[0.0, 0.0],
-                          [1.0, 0.0],
-                          [0.0, 1.0],
-                          [1.0, 1.0]],
-                         dtype=np.float32)
-
-    fbuf_vertices = VertexBuffer(data=vertices)
-    fbuf_texcoords = VertexBuffer(data=texcoords)
-
-    fbuffer_prog = Program(src_fbuffer.vert, src_fbuffer.frag)
-    fbuffer_prog['texcoord'] = fbuf_texcoords
-    fbuffer_prog['position'] = fbuf_vertices
-
-    vertex_buffer = VertexBuffer()
-    index_buffer = IndexBuffer()
-
-    default_prog = Program(src_default.vert, src_default.frag)
-    texture_prog = Program(src_texture.vert, src_texture.frag)
-    texture_prog['texcoord'] = fbuf_texcoords
+    glEnable(GL_BLEND)
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+    glEnable(GL_CULL_FACE)
+    glDisable(GL_DEPTH_TEST)
+    
+    global vg
+    vg = nvg.Context()
 
     reset_view()
 
 def clear(color=True, depth=True):
     """Clear the renderer background."""
     gloo.set_state(clear_color=background_color)
-    gloo.clear(color=color, depth=depth)
+    gloo.clear(color=color, depth=depth, stencil=True)
 
 def reset_view():
     """Reset the view of the renderer."""
@@ -158,9 +109,6 @@ def reset_view():
     global transform_matrix
     global modelview_matrix
     global projection_matrix
-
-    global fbuffer_tex_front
-    global fbuffer_tex_back
 
     viewport = (
         0,
@@ -176,33 +124,6 @@ def reset_view():
     )
     gloo.set_viewport(*viewport)
 
-    cz = (builtins.height / 2) / math.tan(math.radians(30))
-    projection_matrix = matrix.perspective_matrix(
-        math.radians(60),
-        builtins.width / builtins.height,
-        0.1 * cz,
-        10 * cz
-    )
-    modelview_matrix = matrix.translation_matrix(-builtins.width / 2, \
-                                                 builtins.height / 2, \
-                                                 -cz)
-    modelview_matrix = modelview_matrix.dot(matrix.scale_transform(1, -1, 1))
-
-    transform_matrix = np.identity(4)
-
-    default_prog['modelview'] = modelview_matrix.T.flatten()
-    default_prog['projection'] = projection_matrix.T.flatten()
-
-    texture_prog['modelview'] = modelview_matrix.T.flatten()
-    texture_prog['projection'] = projection_matrix.T.flatten()
-
-    fbuffer_tex_front = Texture2D((builtins.height, builtins.width, 3))
-    fbuffer_tex_back = Texture2D((builtins.height, builtins.width, 3))
-
-    for buf in [fbuffer_tex_front, fbuffer_tex_back]:
-        fbuffer.color_buffer = buf
-        with fbuffer:
-            clear()
 
 def cleanup():
     """Run the clean-up routine for the renderer.
@@ -211,9 +132,7 @@ def cleanup():
     program is about to exit.
 
     """
-    default_prog.delete()
-    fbuffer_prog.delete()
-    fbuffer.delete()
+    pass
 
 ## RENDERING FUNTIONS + HELPERS
 ##
@@ -223,6 +142,14 @@ def cleanup():
 ##    with draw_loop():
 ##        # multiple calls to render()
 ##
+
+def create_texture(data):
+    global vg
+    pixels = np.array(data).flatten().tobytes()
+    return vg.createImageRGBA(data.shape[0], data.shape[1], pixels)
+
+def delete_texture(texture):
+    pass
 
 def render_image(image, location, size):
     """Render the image.
@@ -236,175 +163,120 @@ def render_image(image, location, size):
     :param size: target size of the image to draw.
     :type size: tuple | list | p5.Vector
     """
-    flush_geometry()
+    global vg
+    image_pattern = vg.imagePattern(0, 0, size[0], size[1], 0, image._texture, 1)
 
-    texture_prog['fill_color'] = tint_color if tint_enabled else COLOR_WHITE
-    texture_prog['transform'] = transform_matrix.T.flatten()
+    apply_transformation()
 
-    x, y = location
-    sx, sy = size
-    imx, imy = image.size
-    data = np.zeros(4,
-                    dtype=[('position', np.float32, 2),
-                           ('texcoord', np.float32, 2)])
-    data['texcoord'] = np.array([[0.0, 1.0],
-                                 [1.0, 1.0],
-                                 [0.0, 0.0],
-                                 [1.0, 0.0]],
-                                dtype=np.float32)
-    data['position'] = np.array([[x, y + sy],
-                                 [x + sx, y + sy],
-                                 [x, y],
-                                 [x + sx, y]],
-                                dtype=np.float32)
+    vg.beginPath()
+    vg.rect(location[0], location[1], size[0], size[1])
+    vg.fillPaint(image_pattern)
+    vg.fill()
 
-    texture_prog['texture'] = image._texture
-    texture_prog.bind(VertexBuffer(data))
-    texture_prog.draw('triangle_strip')
+def apply_transformation():
+    global vg
+    vg.transform(transform_matrix[0][0], 
+        transform_matrix[1][0], 
+        transform_matrix[0][1], 
+        transform_matrix[1][1], 
+        transform_matrix[0][3], 
+        transform_matrix[1][3])
 
-def flush_geometry():
-    """Flush all the shape geometry from the draw queue to the GPU.
-    """
-    global poly_draw_queue
-    global line_draw_queue
-    global point_draw_queue
+def read_pixels():
+    return gloo.read_pixels(alpha=False)
 
-    ## RETAINED MODE RENDERING.
-    #
-    names = ['poly', 'line', 'point']
-    types = ['triangles', 'lines', 'points']
-    queues = [poly_draw_queue, line_draw_queue, point_draw_queue]
+def flush():
+    gloo.flush()
 
-    for draw_type, draw_queue, name in zip(types, queues, names):
-        # 1. Get the maximum number of vertices persent in the shapes
-        # in the draw queue.
-        #
-        if len(draw_queue) == 0:
-            continue
-
-        num_vertices = 0
-        for vertices, _, _ in draw_queue:
-            num_vertices = num_vertices + len(vertices)
-
-        # 2. Create empty buffers based on the number of vertices.
-        #
-        data = np.zeros(num_vertices,
-                        dtype=[('position', np.float32, 3),
-                               ('color', np.float32, 4)])
-
-        # 3. Loop through all the shapes in the geometry queue adding
-        # it's information to the buffer.
-        #
-        sidx = 0
-        draw_indices = []
-        for vertices, idx, color in draw_queue:
-            num_shape_verts = len(vertices)
-
-            data['position'][sidx:(sidx + num_shape_verts),] = vertices
-
-            color_array = np.array([color] * num_shape_verts)
-            data['color'][sidx:sidx + num_shape_verts, :] = color_array
-
-            draw_indices.append(sidx + idx)
-
-            sidx += num_shape_verts
-
-        vertex_buffer.set_data(data)
-        index_buffer.set_data(np.hstack(draw_indices))
-
-        # 4. Bind the buffer to the shader.
-        #
-        default_prog.bind(vertex_buffer)
-
-        # 5. Draw the shape using the proper shape type and get rid of
-        # the buffers.
-        #
-        default_prog.draw(draw_type, indices=index_buffer)
-
-    # 6. Empty the draw queue.
-    poly_draw_queue = []
-    line_draw_queue = []
-    point_draw_queue = []
-
-@contextmanager
-def draw_loop():
-    """The main draw loop context manager.
-    """
+def start_render():
+    global vg
     global transform_matrix
-
-    global fbuffer_tex_front
-    global fbuffer_tex_back
-
     transform_matrix = np.identity(4)
+    # clear()
+    vg.beginFrame(builtins.width, builtins.height, 1)
+    apply_transformation()
 
-    default_prog['modelview'] = modelview_matrix.T.flatten()
-    default_prog['projection'] = projection_matrix.T.flatten()
 
-    fbuffer.color_buffer = fbuffer_tex_back
+def end_render():
+    global vg
+    vg.endFrame()
+    flush()
 
-    with fbuffer:
-        gloo.set_viewport(*texture_viewport)
-        _comm_toggles()
-        fbuffer_prog['texture'] = fbuffer_tex_front
-        fbuffer_prog.draw('triangle_strip')
+def draw_shape(shape):
+    global vg
 
-        yield
-
-        flush_geometry()
-
-    gloo.set_viewport(*viewport)
-    _comm_toggles(False)
-    clear()
-    fbuffer_prog['texture'] = fbuffer_tex_back
-    fbuffer_prog.draw('triangle_strip')
-
-    fbuffer_tex_front, fbuffer_tex_back = fbuffer_tex_back, fbuffer_tex_front
-
-def add_to_draw_queue(stype, vertices, edges, faces, fill=None, stroke=None):
-    """Add the given vertex data to the draw queue.
-
-    :param stype: type of shape to be added. Should be one of {'poly',
-        'path', 'point'}
-    :type stype: str
-
-    :param vertices: (N, 3) array containing the vertices to be drawn.
-    :type vertices: np.ndarray
-
-    :param edges: (N, 2) array containing edges as tuples of indices
-        into the vertex array. This can be None when not appropriate
-        (eg. for points)
-    :type edges: None | np.ndarray
-
-    :param faces: (N, 3) array containing faces as tuples of indices
-        into the vertex array. For 'point' and 'path' shapes, this can
-        be None
-    :type faces: np.ndarray
-
-    :param fill: Fill color of the shape as a normalized RGBA tuple.
-        When set to `None` the shape doesn't get a fill (default: None)
-    :type fill: None | tuple
-
-    :param stroke: Stroke color of the shape as a normalized RGBA
-        tuple. When set to `None` the shape doesn't get stroke
-        (default: None)
-    :type stroke: None | tuple
-
-    """
-    global poly_draw_queue
-    global line_draw_queue
-    global point_draw_queue
-
-    fill_shape = fill_enabled and not (fill is None)
-    stroke_shape = stroke_enabled and not (stroke is None)
-
-    if fill_shape and stype not in ['point', 'path']:
-        idx = np.array(faces, dtype=np.uint32).ravel()
-        poly_draw_queue.append((vertices, idx, fill))
-
-    if stroke_shape:
-        if stype == 'point':
-            idx = np.arange(0, len(vertices), dtype=np.uint32)
-            point_draw_queue.append((vertices, idx, stroke))
+    vg.shapeAntiAlias(1 if smooth else 0)
+    vg.beginPath()
+    vg.save()
+    vg.transform(shape._matrix[0][0], 
+            shape._matrix[1][0], 
+            shape._matrix[0][1], 
+            shape._matrix[1][1], 
+            shape._matrix[0][3], 
+            shape._matrix[1][3])
+    if type(shape) is PShape:
+        if "point" in shape.attribs:
+            x, y = shape.vertices[0]
+            vg.shapeAntiAlias(0)
+            vg.rect(x, y, 1, 1)
         else:
-            idx = np.array(edges, dtype=np.uint32).ravel()
-            line_draw_queue.append((vertices, idx, stroke))
+            i = 0
+            for x, y in shape.vertices:
+                if i == 0:
+                    vg.moveTo(x, y)
+                else: 
+                    vg.lineTo(x, y)
+                i += 1
+        
+    elif type(shape) is Arc:
+        cx, cy, _ = shape._center
+        rx, ry, _ = shape._radii
+        vg.arc(cx, cy, rx, shape._start_angle, shape._stop_angle, 2)
+        if "pie" in shape.attribs:
+            vg.lineTo(cx, cy)
+    elif type(shape) is Ellipse:
+        cx, cy = shape._center
+        vg.ellipse(cx, cy, shape._width/2, shape._height/2)
+    elif type(shape) is Rect:
+        cx, cy = shape._center
+        vg.rect(cx, cy, shape._width, shape._height)
+    elif type(shape) is Bezier:
+        sx, sy = shape._start
+        cp1x, cp1y = shape._control_point_1
+        cp2x, cp2y = shape._control_point_2
+        ex, ey = shape._stop
+        vg.moveTo(sx, sy)
+        vg.bezierTo(cp1x, cp1y, cp2x, cp2y, ex, ey)
+
+    if "closed" in shape.attribs:
+        vg.closePath()
+    vg.restore()
+
+    cap_type = 1
+    if shape.stroke_cap == "BUTT":
+        cap_type = 1
+    elif shape.stroke_cap == "ROUND":
+        cap_type = 2
+    elif shape.stroke_cap == "SQUARE":
+        cap_type = 3
+    vg.lineCap(cap_type)
+
+    join_type = 1
+    if shape.stroke_join == "MITER":
+        join_type = 1
+    elif shape.stroke_join == "ROUND":
+        join_type = 2
+    elif shape.stroke_join == "SQUARE":
+        join_type = 3
+    vg.lineJoin(join_type)
+    vg.strokeWidth(shape.stroke_weight)
+
+    if shape.kind == "poly" and shape.fill is not None:
+        r, g, b, a = shape.fill.normalized
+        vg.fillColor(r, b, g, a)
+        vg.fill()
+    if shape.stroke is not None:
+        r, g, b, a = shape.stroke.normalized
+        vg.strokeColor(r, b, g, a)
+        vg.stroke()
+

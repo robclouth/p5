@@ -19,6 +19,10 @@ import builtins
 import contextlib
 import functools
 
+import urllib 
+import requests
+from io import BytesIO
+
 import numpy as np
 import PIL
 from PIL import Image
@@ -96,6 +100,10 @@ class PImage:
         self._img_texture = None
         self._img_data = None
 
+    def __del__(self):
+        if self._img_texture is not None:
+            sketch.renderer.delete_texture(self._img_texture)
+
     @property
     @_ensure_loaded
     def width(self):
@@ -149,8 +157,7 @@ class PImage:
     @_ensure_loaded
     def _texture(self):
         if self._img_texture is None:
-            texdata = self._data.astype(np.float32) / 255.0
-            self._img_texture = gloo.Texture2D(texdata, interpolation='linear')
+            self._img_texture = sketch.renderer.create_texture(self._data)
         return self._img_texture
 
     @property
@@ -554,8 +561,8 @@ def image_mode(mode):
         raise ValueError("Unknown image mode!")
     _image_mode = mode.lower()
 
-def load_image(filename):
-    """Load an image from the given filename.
+def load_image(uri):
+    """Load an image from the given filename or url.
 
     Loads an image into a variable of type PImage. Four types of
     images may be loaded. 
@@ -572,9 +579,12 @@ def load_image(filename):
     :rtype: :class:`p5.PImage`
 
     """
-    # todo: add support for loading images from URLs -- abhikpal
-    # (2018-08-14)
-    img = Image.open(filename)
+
+    if urllib.parse.urlparse(uri).scheme in ('http', 'https'):
+        response = requests.get(uri)
+        img = Image.open(BytesIO(response.content))
+    else:
+        img = Image.open(uri)
     w, h = img.size
     pimg = PImage(w, h)
     pimg._img = img

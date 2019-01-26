@@ -28,18 +28,19 @@ import vispy
 from vispy import app
 from vispy import gloo
 from vispy import io
-
+import glfw
+import OpenGL
+from OpenGL.GL import *
 from .. sketch import renderer
 
 from .events import KeyEvent
 from .events import MouseEvent
 from .events import handler_names
 
-from .renderer import draw_loop
 from .renderer import initialize_renderer
 from .renderer import clear
 from .renderer import reset_view
-from .renderer import add_to_draw_queue
+from .renderer import draw_shape
 
 def _dummy(*args, **kwargs):
     """Eat all arguments, do nothing.
@@ -50,37 +51,7 @@ def _transform_vertices(vertices, local_matrix, global_matrix):
     return np.dot(np.dot(vertices, local_matrix.T), global_matrix.T)[:, :3]
 
 def render(shape):
-    vertices = shape._draw_vertices
-    n, _ = vertices.shape
-    tverts = _transform_vertices(
-        np.hstack([vertices, np.zeros((n, 1)), np.ones((n, 1))]),
-        shape._matrix,
-        renderer.transform_matrix)
-    fill = shape.fill.normalized if shape.fill else None
-    stroke = shape.stroke.normalized if shape.stroke else None
-
-    edges = shape._draw_edges
-    faces = shape._draw_faces
-
-    if edges is None:
-        print(vertices)
-        print("whale")
-        exit()
-
-    if 'open' in shape.attribs:
-        overtices = shape._draw_outline_vertices
-        no, _  = overtices.shape
-        toverts = _transform_vertices(
-            np.hstack([overtices, np.zeros((no, 1)), np.ones((no, 1))]),
-            shape._matrix,
-            renderer.transform_matrix)
-
-        add_to_draw_queue('path', toverts, shape._draw_outline_edges,
-                          None, None, stroke)
-        add_to_draw_queue('poly', tverts, edges, faces, fill, None)
-    else:
-        add_to_draw_queue(shape.kind, tverts, edges, faces, fill, stroke)
-
+    draw_shape(shape)
 
 class Sketch(app.Canvas):
     """The main sketch instance.
@@ -104,12 +75,19 @@ class Sketch(app.Canvas):
     """
     def __init__(self, setup_method, draw_method,
                  handlers=dict(), frame_rate=60):
+        glfw.init()
+        glfw.window_hint(glfw.CONTEXT_VERSION_MAJOR, 3)
+        glfw.window_hint(glfw.CONTEXT_VERSION_MINOR, 3)
+        glfw.window_hint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
+        glfw.window_hint(glfw.OPENGL_FORWARD_COMPAT, GL_TRUE)
+        glfw.window_hint(glfw.DOUBLEBUFFER, GL_FALSE)
         app.Canvas.__init__(
             self,
             title=builtins.title,
             size=(builtins.width, builtins.height),
             keys='interactive',
             resizable=False,
+            config={"stencil_size": 8}
         )
 
         self.setup_method = setup_method
@@ -136,24 +114,24 @@ class Sketch(app.Canvas):
     def on_timer(self, event):
         self.measure_fps(callback=lambda _: None)
         builtins.frame_rate = round(self.fps, 2)
-        with draw_loop():
-            if self.looping or self.redraw:
-                builtins.frame_count += 1
-                if not self.setup_done:
-                    self.setup_method()
-                    self.setup_done = True
-                    self.show(visible=True)
-                    self.redraw = True
-                    self.looping = False
-                else:
-                    self.looping = True
-                    self.draw_method()
-                    self.redraw = False
+ 
+        if self.looping or self.redraw:
+            builtins.frame_count += 1
+            renderer.start_render()
+            if not self.setup_done:
+                self.setup_method()
+                self.setup_done = True
+                self.show(visible=True)
+                self.redraw = True
+            else:
+                self.redraw = False
+                self.draw_method()
+            renderer.end_render()
 
-            while len(self.handler_queue) != 0:
-                function, event = self.handler_queue.pop(0)
-                event._update_builtins()
-                function(event)
+        while len(self.handler_queue) != 0:
+            function, event = self.handler_queue.pop(0)
+            event._update_builtins()
+            function(event)
 
         if self._save_flag:
             self._save_buffer()
@@ -162,15 +140,15 @@ class Sketch(app.Canvas):
     def _save_buffer(self):
         """Save the renderer buffer to the given file.
         """
-        img_data = renderer.fbuffer.read(mode='color', alpha=False)
+        img_data = renderer.read_pixels()
         img = Image.fromarray(img_data)
         img.save(self._save_fname)
         self._save_flag = False
 
     def screenshot(self, filename):
-        self.queue_screenshot(filename)
-        renderer.flush_geometry()
-        self._save_buffer()
+        self._save_flag = True
+        self._save_fname = filename
+
 
     def queue_screenshot(self, filename):
         """Save the current frame
@@ -190,8 +168,7 @@ class Sketch(app.Canvas):
 
     def on_resize(self, event):
         reset_view()
-        with draw_loop():
-            clear()
+        clear()
 
     def _enqueue_event(self, handler_name, event):
         event._update_builtins()
